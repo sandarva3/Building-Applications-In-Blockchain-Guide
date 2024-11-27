@@ -1,107 +1,399 @@
-pragma solidity >=0.4.22 <0.9.0;
+// SPDX-License-Identifier: MIT
+
+
+//This is a simple Student Management System Program built on ethereum, it's purpose is to reward students who are attending college regularly some prizes
+//on ETH crytpo.
+//There are various functionalities for students, and almost-all necessary functionalities which are required to manage students and details about them.
+
+pragma solidity >=0.8.0;
 
 contract StudentRecords {
-    uint StudentId =0;
-    
-    
+    using SafeMath for uint;
+
     struct Student {
         uint id;
         string name;
         uint rollNo;
-        uint percentage;
-        bool redeemed;
-        
-        
+        uint semester;
+        mapping(uint => string) grade;
+        mapping(uint => uint) attendance;
+        address studentWallet;
+        bool isRegistered;
+        bool isDeleted;
     }
-    // event AddStudent(string name, uint rollNo, uint percentage);
-    // event EditStudent(uint id, string  name, uint rollno, uint percentage);
+    mapping(uint => Student) students; //To map each id to student, automatically stored on storage.
+    uint public studentCount; //Global variable, automatically stored on storage & assigned 0.
 
-    mapping(uint => address) studentToAddress;
-    mapping(address => Student) students;
-    mapping(address => uint) registration;
-   
-   
+    address public _owner;
+    mapping(uint => uint) maxAttendance;
 
-    // Payable constructor can receive Ether
-    
-    function redeemEther() public {
-        // address payable studentaddress =payable(msg.sender);
-        if(_checkforrecord())
-        {
-        require(students[msg.sender].redeemed == false);
-        msg.sender.transfer(1 ether);
-        students[msg.sender].redeemed = true;
-        }
-        
-        else{
-            revert('You are not registered');
-            
-        }
-        
-    }
-     function balanceof() external view returns(uint) {
-        
-        return address(this).balance;
-    }
-    
-    function depositether() external payable{
-        
-        
+    constructor() {
+        _owner = msg.sender;
     }
 
-    
-    function registerStudent(string memory _name, uint _rollno, uint _percentage) public {
-        require(registration[msg.sender]==0);
-        registration[msg.sender]++;
-        students[msg.sender] = Student(StudentId, _name, _rollno, _percentage,false);
-        studentToAddress[StudentId]= msg.sender;
-        // emit AddStudent(_name, _rollno, _percentage);
-        StudentId++;
-    
-        
+    //Modifiers
+    modifier onlyOwner() {
+        require(msg.sender == _owner, "not the owner");
+        _;
     }
-    
-    function getstudents() view public returns(uint,string memory,uint,uint,bool ){
-    
-            
-           return(students[msg.sender].id,students[msg.sender].name, students[msg.sender].rollNo, students[msg.sender].percentage, students[msg.sender].redeemed);
-        
-        
+    modifier checkStudent(uint id) {
+        require(students[id].isRegistered, "Student not registered");
+        require(students[id].isDeleted == false, "Student already deleted.");
+        _;
     }
-    
-    function updateStudent(uint _id, string memory _name, uint _rollno, uint _percentage) public{
-        
-        if(_checkforrecord())
-        {
-             require(studentToAddress[_id] == msg.sender);
-        require(students[msg.sender].id==_id);
-        
-        students[msg.sender].name = _name;
-        students[msg.sender].rollNo= _rollno;
-        students[msg.sender].percentage=_percentage;
-        // emit EditStudent(_id, _name, _rollno, _percentage);
-        } else{
-            revert('You arenot registered');
-        }
-        
-       
+    modifier checkSem(uint id, uint sem) {
+        require(
+            students[id].semester < sem,
+            "Hasn't passed the given semester. Update the semester"
+        );
+        _;
     }
-    
-    function deleteStudent() public{
-    
-    
-    delete students[msg.sender];
-    
-   
-    
-}
-function _checkforrecord() private view returns(bool) {
-    for(uint i=0;i<=StudentId;i++)
+
+    //Events
+    event studentRegistered(
+        uint id,
+        string name,
+        uint roll,
+        uint sem,
+        address walletKey
+    );
+    event nameUpdated(uint id, string oldName, string newName);
+    event rollUpdated(uint id, uint oldRoll, uint newRoll);
+    event semUpdated(uint id, uint oldSem, uint newSem);
+    event gradeUpdated(uint id, string oldGrade, string newGrade);
+    event deposited(uint amount, address from);
+    event etherSent(uint amount, string name, uint id, address _address);
+
+    //Register student for the first time
+    function registerStudent(
+        string memory name,
+        uint rollno,
+        uint sem,
+        address key
+    ) public onlyOwner returns (uint, bool) {
+        require(checkWallet(key), "The provided wallet key already exist");
+        require(checkRoll(rollno), "Student with given Roll no already exist");
+        studentCount++;
+
+        students[studentCount].id = studentCount;
+        students[studentCount].name = name;
+        students[studentCount].rollNo = rollno;
+        students[studentCount].semester = sem;
+        students[studentCount].attendance[sem] = 0;
+        students[studentCount].studentWallet = key;
+        students[studentCount].isRegistered = true;
+        students[studentCount].isDeleted = false;
+
+        emit studentRegistered(studentCount, name, rollno, sem, key);
+        return (studentCount, true);
+    }
+
+    //Any student can view any other or their Basic informations
+    function getStudent(
+        uint id
+    ) public view checkStudent(id) returns (string memory, uint, uint) {
+        return (students[id].name, students[id].rollNo, students[id].semester);
+    }
+
+    //Full information of student can only be viewed by owner.
+    function getStudentFullInfo(
+        uint id
+    )
+        public
+        view
+        onlyOwner
+        checkStudent(id)
+        returns (
+            uint,
+            string memory,
+            uint,
+            uint,
+            string memory,
+            uint,
+            address,
+            bool,
+            bool
+        )
     {
-        if(studentToAddress[i]==msg.sender){
+        uint currentSem = students[id].semester;
+        return (
+            students[id].id,
+            students[id].name,
+            students[id].rollNo,
+            currentSem,
+            students[id].grade[currentSem],
+            students[id].attendance[currentSem],
+            students[id].studentWallet,
+            students[id].isRegistered,
+            students[id].isDeleted
+        );
+    }
+
+    function getWallet(uint id) public view returns (address) {
+        return (students[id].studentWallet);
+    }
+
+    function updateName(
+        uint id,
+        string memory name
+    ) public onlyOwner checkStudent(id) returns (bool) {
+        emit nameUpdated(id, students[id].name, name);
+        students[id].name = name;
+        return true;
+    }
+
+    function updateRoll(
+        uint id,
+        uint roll
+    ) public onlyOwner checkStudent(id) returns (bool) {
+        require(checkRoll(roll), "The Roll no already exist.");
+        emit rollUpdated(id, students[id].rollNo, roll);
+        students[id].rollNo = roll;
+        return true;
+    }
+
+    function updateSem(
+        uint id,
+        uint sem
+    ) public onlyOwner checkStudent(id) returns (bool) {
+        emit semUpdated(id, students[id].semester, sem);
+        students[id].semester = sem;
+        return true;
+    }
+
+    function addGrade(
+        uint id,
+        uint sem,
+        string memory _grade
+    ) public onlyOwner checkStudent(id) checkSem(id, sem) returns (bool) {
+        students[id].grade[sem] = _grade;
+        return true;
+    }
+
+    function getGrade(
+        uint id,
+        uint sem
+    ) public view checkStudent(id) checkSem(id, sem) returns (string memory a) {
+        return students[id].grade[sem];
+    }
+
+    //Semester wise grade
+    function updateGrade(
+        uint id,
+        uint sem,
+        string memory _grade
+    ) public onlyOwner checkStudent(id) returns (bool) {
+        require(
+            bytes(students[id].grade[sem]).length != 0,
+            "No grade. First add grade"
+        );
+        emit gradeUpdated(id, students[id].grade[sem], _grade);
+        students[id].grade[sem] = _grade;
+        return true;
+    }
+
+    //Semester wise attendance
+    function updateAttendance(
+        uint id,
+        uint sem
+    ) public onlyOwner checkStudent(id) checkSem(id, sem) returns (bool) {
+        students[id].attendance[sem] += 1;
+        return true;
+    }
+
+    function getAttendance(
+        uint id,
+        uint sem
+    ) public view checkStudent(id) checkSem(id, sem) returns (uint) {
+        return students[id].attendance[sem];
+    }
+
+    function balanceOf(uint id) public view checkStudent(id) returns (uint) {
+        address stuAddress = students[id].studentWallet;
+        return (address(stuAddress).balance);
+    }
+
+    //To avoid duplicate rollNo for new to-be-register student.
+    function checkRoll(uint roll) internal view onlyOwner returns (bool) {
+        uint count = 0;
+        for (uint i = 1; i <= studentCount; i++) {
+            if (students[i].isDeleted == false) {
+                if (students[i].rollNo == roll) {
+                    count++;
+                }
+            }
+        }
+        if (count != 0) {
+            return false;
+        } else {
             return true;
         }
     }
-    return false;
+
+    //To avoid duplicate wallet for new to-be-register student.
+    function checkWallet(
+        address stuAddress
+    ) internal view onlyOwner returns (bool) {
+        uint count = 0;
+        for (uint i = 1; i <= studentCount; i++) {
+            if (students[i].isDeleted == false) {
+                if (students[i].studentWallet == stuAddress) {
+                    count++;
+                }
+            }
+        }
+        if (count != 0) {
+            return false;
+        } else {
+            return true;
+        }
+    }
+
+    function viewBalance() public view onlyOwner returns (uint) {
+        return address(this).balance;
+    }
+
+    function deposit(uint amount) public payable onlyOwner returns (bool) {
+        //In web3 js interface we specify value in calling deposit()
+        require(amount > 0, "Amount must be greater than zero");
+        emit deposited(amount, _owner);
+
+        return true;
+    }
+
+    function sendEther(uint amount, uint id) public onlyOwner returns (bool) {
+        require(amount > 0, "Amount must be greater than zero");
+        require(
+            address(this).balance > amount,
+            "Insufficient balance in contract."
+        );
+
+        address receiver = students[id].studentWallet;
+        (bool success, ) = receiver.call{value: amount}("");
+        require(success, "Transfer failed");
+        emit etherSent(amount, students[id].name, id, receiver);
+
+        return true;
+    }
+
+    function setAttendance(
+        uint value,
+        uint sem
+    ) public onlyOwner returns (bool) {
+        maxAttendance[sem] = value;
+        return true;
+    }
+
+    function sendPrize(uint id) internal {
+        address receiver = students[id].studentWallet;
+        (bool success, ) = receiver.call{value: 5 * 1 ether}("");
+        require(success, "Transfer Failed.");
+    }
+
+    //Distribute prize to students who come regularly and have high attendance.
+    //Those students are identified as 'boring students' here.
+    function distributePrize(uint sem) public onlyOwner returns (bool) {
+        require(
+            maxAttendance[sem] > 0,
+            "Max-Attendance for this semester is not set."
+        );
+        uint count;
+        uint index;
+
+        for (uint i = 1; i <= studentCount; i++) {
+            if (students[i].isDeleted == false) {
+                uint _sem = students[i].semester;
+                if (_sem == sem) {
+                    count += 1;
+                }
+            }
+        }
+
+        uint[] memory totalStudents = new uint[](count);
+
+        for (uint i = 1; i <= studentCount; i++) {
+            if (students[i].isDeleted == false) {
+                uint _sem = students[i].semester;
+                if (_sem == sem) {
+                    totalStudents[index] = i;
+                    index += 1;
+                }
+            }
+        }
+
+        count = 0;
+        index = 0;
+
+        for (uint i = 0; i < totalStudents.length; i++) {
+            uint id = totalStudents[i];
+
+            if (students[id].isDeleted == false) {
+                uint _attendance = students[id].attendance[sem];
+                if (_attendance == maxAttendance[sem]) {
+                    count += 1;
+                }
+            }
+        }
+
+        uint[] memory boringStudents = new uint[](count);
+        for (uint i = 0; i < totalStudents.length; i++) {
+            uint id = totalStudents[i];
+
+            if (students[i].isDeleted == false) {
+                uint _attendance = students[id].attendance[sem];
+                if (_attendance == maxAttendance[sem]) {
+                    boringStudents[index] = id;
+                    index += 1;
+                }
+            }
+        }
+
+        uint totalBorers = boringStudents.length;
+        uint requiredAmount = totalBorers.mul(5 * 1 ether);
+
+        require(
+            address(this).balance >= requiredAmount,
+            "Insufficient Balance."
+        );
+
+        for (uint i = 0; i < totalBorers; i++) {
+            uint id = boringStudents[i];
+            sendPrize(id);
+        }
+
+        return true;
+    }
+
+    //Remove a student
+    function deleteStudent(
+        uint id
+    ) public onlyOwner checkStudent(id) returns (bool) {
+        students[id].isDeleted = true;
+        return true;
+    }
 }
+
+library SafeMath {
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        assert(b <= a);
+        return a - b;
+    }
+
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        assert(c >= a);
+        return c;
+    }
+
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        // Gas optimization: this is cheaper than requiring 'a' not being zero, but the benefit
+        // is lost if 'b' is also tested.
+        if (a == 0) {
+            return 0;
+        }
+
+        uint256 c = a * b;
+        assert(c / a == b); // Ensures no overflow occurred
+        return c;
+    }
 }
